@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+files=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$files" ] && exit 0
+
+if printf '%s\n' "$files" | grep -qE '\.(ts|css|json)$'; then
+  ./node_modules/.bin/biome check --write --staged --no-errors-on-unmatched
+fi
+
+if printf '%s\n' "$files" | grep -q '\.rs$'; then
+  cargo fmt --manifest-path src-tauri/Cargo.toml
+  cargo clippy --manifest-path src-tauri/Cargo.toml --fix --allow-dirty --allow-staged --all-targets -q
+fi
+
+git diff --cached --name-only --diff-filter=ACM -z | xargs -0 git add

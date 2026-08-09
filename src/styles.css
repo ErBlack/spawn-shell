@@ -1,0 +1,60 @@
+@import "@xterm/xterm/css/xterm.css" layer(xterm);
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: none;
+}
+
+body {
+  transform: translateY(-100%);
+}
+
+#terminal {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 1fr;
+  align-content: end;
+  padding: 8px 0 8px 8px;
+  background-color: #11111adf;
+  border-bottom: 1px solid #575757c4;
+}
+
+.xterm-viewport {
+  background-color: transparent;
+  scrollbar-width: none;
+}
+
+.xterm-scrollable-element > .scrollbar {
+  & > .slider {
+    &::before {
+      content: "";
+      position: absolute;
+      background-color: #e6edf326;
+      border-radius: 4px;
+      transition: background-color 120ms ease;
+    }
+
+    &:hover::before {
+      background-color: #e6edf340;
+    }
+
+    &:active::before {
+      background-color: #e6edf359;
+    }
+  }
+
+  &.vertical > .slider::before {
+    inset: 0 4px;
+  }
+
+  &.horizontal > .slider::before {
+    inset: 4px 0;
+  }
+}

@@ -1,0 +1,39 @@
+[package]
+name = "summon"
+version = "0.1.0"
+description = "A Quake-style drop-down terminal"
+authors = ["erblack"]
+edition = "2024"
+
+[[bin]]
+name = "Summon"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["macos-private-api"] }
+tauri-plugin-single-instance = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+portable-pty = "0.9"
+dirs = "6"
+parking_lot = "0.12"
+vt100 = "0.16"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSNotification", "NSOperation"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSPanel", "NSWindow", "NSView", "NSResponder"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

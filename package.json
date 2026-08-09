@@ -1,0 +1,30 @@
+{
+  "name": "summon-terminal",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "prepare": "git config core.hooksPath .githooks || true",
+    "start": "tauri dev",
+    "build": "tauri build",
+    "frontend": "vite",
+    "frontend:build": "vite build",
+    "lint": "biome check src && cargo clippy --manifest-path src-tauri/Cargo.toml",
+    "fix": "biome check --write src && cargo fmt --manifest-path src-tauri/Cargo.toml && cargo clippy --fix --allow-dirty --allow-staged --manifest-path src-tauri/Cargo.toml",
+    "check:types": "tsc && cargo check --manifest-path src-tauri/Cargo.toml",
+    "check:unused": "knip"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-opener": "^2.5.4",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/xterm": "^6.0.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.4",
+    "@tauri-apps/cli": "^2.11.4",
+    "knip": "^6.27.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.1.5"
+  }
+}
