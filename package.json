@@ -1,5 +1,5 @@
 {
-  "name": "summon-terminal",
+  "name": "spawnshell-terminal",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-log": "^2.10.0",
     "@tauri-apps/plugin-opener": "^2.5.4",
     "@xterm/addon-web-links": "^0.12.0",
     "@xterm/xterm": "^6.0.0"

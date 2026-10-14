@@ -1,12 +1,12 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { commands, events } from "./bindings.ts";
 
 export async function setupWindow(
   pane: HTMLElement,
   hooks: {
-    fitAndResize(): void;
+    fit(): void;
     focus(): void;
-    ensureAlive(): void;
+    onShow(): void;
+    onHide(): void;
   },
 ): Promise<void> {
   const slide = async (toVisible: boolean): Promise<boolean> => {
@@ -14,8 +14,9 @@ export async function setupWindow(
       ? [{ transform: "translateY(-100%)" }, { transform: "translateY(0)" }]
       : [{ transform: "translateY(0)" }, { transform: "translateY(-100%)" }];
     for (const running of document.body.getAnimations()) running.cancel();
+    const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
     const animation = document.body.animate(keyframes, {
-      duration: 180,
+      duration: reduced ? 0 : 180,
       easing: "linear",
       fill: "forwards",
     });
@@ -29,24 +30,31 @@ export async function setupWindow(
     }
   };
 
+  let shown = false;
+
   const reveal = () => {
+    if (shown) return;
+    shown = true;
+    hooks.onShow();
     requestAnimationFrame(() => {
+      if (!shown) return;
       slide(true);
-      hooks.fitAndResize();
-      hooks.ensureAlive();
+      hooks.fit();
       hooks.focus();
     });
   };
 
-  new ResizeObserver(() => hooks.fitAndResize()).observe(pane);
+  new ResizeObserver(() => hooks.fit()).observe(pane);
 
   await Promise.all([
-    listen("summon://show", reveal),
-    listen("summon://hide", async () => {
-      if (await slide(false)) invoke("hide_window");
+    events.windowShown.listen(reveal),
+    events.windowHidden.listen(async () => {
+      shown = false;
+      hooks.onHide();
+      if (await slide(false)) commands.hideWindow();
     }),
   ]);
 
-  if (await invoke<boolean>("is_open")) reveal();
-  else await invoke("hide_window");
+  if (await commands.isOpen()) reveal();
+  else await commands.hideWindow();
 }

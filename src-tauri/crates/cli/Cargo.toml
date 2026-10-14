@@ -1,0 +1,16 @@
+[package]
+name = "spawnshell-cli"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "cli"
+
+[dependencies]
+config.workspace = true
+protocol.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+
+[lints]
+workspace = true

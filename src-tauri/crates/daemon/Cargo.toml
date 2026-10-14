@@ -1,0 +1,23 @@
+[package]
+name = "spawnshell-daemon"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "daemon"
+
+[dependencies]
+config.workspace = true
+protocol.workspace = true
+anyhow.workspace = true
+dirs.workspace = true
+libc.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+vt100.workspace = true
+vte.workspace = true
+
+[lints]
+workspace = true

@@ -1,163 +1,99 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { openUrl } from "@tauri-apps/plugin-opener";
-import { WebLinksAddon } from "@xterm/addon-web-links";
-import { Terminal } from "@xterm/xterm";
-import { setupWindow } from "./window.ts";
+import { Channel } from "@tauri-apps/api/core";
+import { error as logError } from "@tauri-apps/plugin-log";
+import { commands, events, type Font } from "./bindings.ts";
+import { errorMessage } from "./error-message.ts";
+import { installKeybindings } from "./install-keybindings.ts";
+import { listenTabMenu } from "./listen-tab-menu.ts";
+import { reportFailure } from "./report-failure.ts";
+import { setupWindow } from "./setup-window.ts";
+import { showError } from "./show-error.ts";
+import { TabManager } from "./tab-manager.ts";
+import { Tabs } from "./tabs.ts";
+import { Terminals } from "./terminals.ts";
 import "./styles.css";
 
-interface Config {
-  font_family: string;
-  font_size: number;
+function element(id: string): HTMLElement {
+  const found = document.getElementById(id);
+  if (!found) throw new Error(`#${id} not found`);
+  return found;
 }
-
-let termRef: Terminal | undefined;
 
 async function main() {
-  const config = await invoke<Config>("get_config");
+  const panes = element("panes");
 
-  const terminal = new Terminal({
-    fontFamily: `${config.font_family}, monospace`,
-    fontSize: Math.min(Math.max(config.font_size, 6), 40),
-    cursorBlink: true,
-    cursorStyle: "bar",
-    drawBoldTextInBrightColors: true,
-    allowTransparency: true,
-    theme: {
-      background: "#00000000",
-      foreground: "#e6edf3",
-      cursor: "#2f81f7",
-      cursorAccent: "#6fc1ff",
-      selectionBackground: "#e6edf3",
-      selectionForeground: "#0d1117",
-      black: "#484f58",
-      red: "#ff7b72",
-      green: "#3fb950",
-      yellow: "#d29922",
-      blue: "#58a6ff",
-      magenta: "#bc8cff",
-      cyan: "#39c5cf",
-      white: "#b1bac4",
-      brightBlack: "#6e7681",
-      brightRed: "#ffa198",
-      brightGreen: "#56d364",
-      brightYellow: "#e3b341",
-      brightBlue: "#79c0ff",
-      brightMagenta: "#d2a8ff",
-      brightCyan: "#56d4dd",
-      brightWhite: "#ffffff",
-      scrollbarSliderBackground: "#00000000",
-      scrollbarSliderHoverBackground: "#00000000",
-      scrollbarSliderActiveBackground: "#00000000",
-    },
+  const terminals = new Terminals(await commands.historyLines());
+  const fonts = new Channel<Font>();
+  const fontReady = new Promise<void>((resolve) => {
+    fonts.onmessage = (font) => {
+      document.body.style.fontFamily = `${font.family}, monospace`;
+      terminals.setFont(font);
+      resolve();
+    };
   });
-  termRef = terminal;
+  await commands.watchFont(fonts);
+  await fontReady;
 
-  terminal.loadAddon(
-    new WebLinksAddon((event, uri) => {
-      if (event.metaKey) openUrl(uri);
+  const tabs = new Tabs(
+    element("tabbar"),
+    element("pinned-tabs"),
+    element("tabs"),
+    {
+      select(id) {
+        manager.select(id);
+        if (manager.find(id)?.alive === false) manager.restart(id);
+      },
+      menu(id) {
+        const pinned = !!(id && manager.find(id)?.pinned);
+        reportFailure(commands.showTabMenu(id ?? null, pinned));
+      },
+      place(id, pinned, position) {
+        manager.place(id, pinned, position);
+      },
+    },
+  );
+  const manager = new TabManager(terminals, panes, () =>
+    tabs.render(manager.entries(), manager.active),
+  );
+
+  const unlisteners = await Promise.all([
+    events.tabsChanged.listen(({ payload }) => manager.update(payload)),
+    events.tabSelected.listen(({ payload }) => manager.select(payload)),
+    events.reconnected.listen(() => {
+      manager.clear();
+      manager
+        .refresh()
+        .catch((error: unknown) =>
+          showError(`couldn't reload tabs: ${errorMessage(error)}`),
+        );
     }),
-  );
-
-  const pane = document.getElementById("terminal");
-  if (!pane) throw new Error("#terminal not found");
-  terminal.open(pane);
-
-  function fit() {
-    if (!pane) return;
-    const screen = pane.querySelector<HTMLElement>(".xterm-screen");
-    if (!screen || terminal.rows < 1 || terminal.cols < 1) return;
-    const cellHeight = screen.clientHeight / terminal.rows;
-    const cellWidth = screen.clientWidth / terminal.cols;
-    if (cellHeight <= 0 || cellWidth <= 0) return;
-    const style = getComputedStyle(pane);
-    const availHeight =
-      pane.clientHeight -
-      parseFloat(style.paddingTop) -
-      parseFloat(style.paddingBottom);
-    const availWidth =
-      pane.clientWidth -
-      parseFloat(style.paddingLeft) -
-      parseFloat(style.paddingRight);
-    const rows = Math.max(1, Math.floor(availHeight / cellHeight));
-    const cols = Math.max(2, Math.floor(availWidth / cellWidth));
-    if (rows !== terminal.rows || cols !== terminal.cols) {
-      terminal.resize(cols, rows);
-    }
-  }
-
-  function spawnPty() {
-    const output = new Channel<ArrayBuffer>();
-    output.onmessage = (data) => terminal.write(new Uint8Array(data));
-    return invoke("pty_spawn", {
-      rows: terminal.rows,
-      cols: terminal.cols,
-      onOutput: output,
-    });
-  }
-
-  const reason = (error: unknown) =>
-    error instanceof Error ? error.message : String(error);
-  const showError = (text: string) =>
-    terminal.write(`\r\n\x1b[31m${text}\x1b[0m\r\n`);
-
-  const encoder = new TextEncoder();
-  let inputFailed = false;
-  const write = (bytes: Uint8Array) =>
-    invoke("pty_write", bytes).then(
-      () => {
-        inputFailed = false;
-      },
-      (error: unknown) => {
-        if (inputFailed) return;
-        inputFailed = true;
-        showError(`Summon couldn't send input: ${reason(error)}`);
-      },
-    );
-  terminal.onData((data) => write(encoder.encode(data)));
-  terminal.onBinary((data) =>
-    write(Uint8Array.from(data, (char) => char.charCodeAt(0))),
-  );
-
-  let exited = false;
-  await listen("pty://exit", () => {
-    exited = true;
+    events.warning.listen(({ payload }) => showError(payload)),
+    listenTabMenu(manager),
+  ]);
+  import.meta.hot?.dispose(() => {
+    for (const unlisten of unlisteners) unlisten();
   });
 
-  async function spawnPtyOrReport() {
-    try {
-      await spawnPty();
-    } catch (error) {
-      exited = true;
-      showError(`Summon couldn't start the shell: ${reason(error)}`);
-    }
-  }
+  await manager.refresh();
+  installKeybindings(manager);
 
-  await setupWindow(pane, {
-    fitAndResize() {
-      fit();
-      invoke("pty_resize", { rows: terminal.rows, cols: terminal.cols });
+  const warning = await commands.takeWarning();
+  if (warning) showError(warning);
+
+  await setupWindow(panes, {
+    fit: () => terminals.fit(),
+    focus: () => manager.focus(),
+    onShow: () => {
+      manager.resume();
+      if (manager.count === 0) manager.create();
     },
-    focus() {
-      terminal.focus();
-    },
-    ensureAlive() {
-      if (!exited) return;
-      exited = false;
-      terminal.reset();
-      spawnPtyOrReport();
-    },
+    onHide: () => reportFailure(commands.sessionSave()),
   });
 
-  fit();
-  await spawnPtyOrReport();
+  terminals.fit();
 }
 
-main().catch((error) => {
-  const message = error instanceof Error ? error.message : String(error);
-  if (termRef) {
-    termRef.write(`\r\n\x1b[31mSummon failed to start: ${message}\x1b[0m\r\n`);
-    return;
-  }
-  invoke("report_fatal", { message });
+main().catch((error: unknown) => {
+  const message = errorMessage(error);
+  logError(`failed to start: ${message}`);
+  commands.reportFatal(message);
 });

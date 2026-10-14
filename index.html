@@ -3,10 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Summon</title>
+    <title>SpawnShell</title>
   </head>
   <body>
-    <div id="terminal"></div>
+    <div id="app">
+      <div id="panes"></div>
+      <nav id="tabbar">
+        <div id="pinned-tabs" class="tab-group"></div>
+        <div id="tabs" class="tab-group"></div>
+      </nav>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

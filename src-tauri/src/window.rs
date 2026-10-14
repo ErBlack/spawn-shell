@@ -1,73 +1,112 @@
+#![expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri commands receive their arguments by value"
+)]
+
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use objc2::MainThreadMarker;
-use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
+use objc2::rc::Retained;
+use objc2_app_kit::NSWindow;
+use serde::Serialize;
+use tauri::{AppHandle, Manager};
+use tauri_specta::Event as _;
+
+use crate::gui_config::GuiConfig;
+use crate::native;
+
+const MAIN: &str = "main";
 
 #[derive(Default)]
 pub struct WindowState {
-    pub open: AtomicBool,
+    open: AtomicBool,
 }
 
-fn position_window(app: &AppHandle, window: &WebviewWindow) {
-    let percent = app.state::<crate::config::Config>().height.clamp(10, 100);
-    if let (Ok(ptr), Some(mtm)) = (window.ns_window(), MainThreadMarker::new()) {
-        crate::native::position_at_cursor(mtm, ptr, percent);
+#[derive(Clone, Serialize, specta::Type, tauri_specta::Event)]
+pub struct WindowShown;
+
+#[derive(Clone, Serialize, specta::Type, tauri_specta::Event)]
+pub struct WindowHidden;
+
+fn on_main_thread(app: &AppHandle, work: impl FnOnce(&AppHandle) + Send + 'static) {
+    let handle = app.clone();
+    if let Err(error) = app.run_on_main_thread(move || work(&handle)) {
+        log::error!("can't reach the main thread: {error}");
     }
 }
 
-pub fn show(app: &AppHandle) {
-    crate::pty::discard_pending_input(app);
+fn main_window(app: &AppHandle) -> Option<Retained<NSWindow>> {
+    let Some(mtm) = MainThreadMarker::new() else {
+        log::error!("the window was accessed off the main thread");
+        return None;
+    };
+    native::ns_window(&app.get_webview_window(MAIN)?, mtm)
+}
+
+fn height(app: &AppHandle) -> u32 {
+    app.state::<GuiConfig>().height()
+}
+
+fn opened(app: &AppHandle) -> bool {
+    app.state::<WindowState>().open.load(Ordering::Relaxed)
+}
+
+fn show_now(app: &AppHandle) {
+    if opened(app) {
+        return;
+    }
+    let Some(ns_window) = main_window(app) else {
+        return;
+    };
     app.state::<WindowState>()
         .open
         .store(true, Ordering::Relaxed);
-    let handle = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        let Some(window) = handle.get_webview_window("main") else {
-            return;
-        };
-        position_window(&handle, &window);
-        if let (Ok(ptr), Some(mtm)) = (window.ns_window(), MainThreadMarker::new()) {
-            crate::native::show(mtm, ptr);
-        }
-        let _ = window.emit("summon://show", ());
-    });
+    native::place_at_cursor(&ns_window, height(app));
+    native::show(&ns_window);
+    let _ = WindowShown.emit(app);
 }
 
-pub fn hide(app: &AppHandle) {
-    if !app
+fn hide_now(app: &AppHandle) {
+    if app
         .state::<WindowState>()
         .open
         .swap(false, Ordering::Relaxed)
     {
-        return;
+        let _ = WindowHidden.emit(app);
     }
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.emit("summon://hide", ());
-    }
+}
+
+pub fn show(app: &AppHandle) {
+    on_main_thread(app, show_now);
+}
+
+pub fn hide(app: &AppHandle) {
+    on_main_thread(app, hide_now);
 }
 
 pub fn toggle(app: &AppHandle) {
-    if app.state::<WindowState>().open.load(Ordering::Relaxed) {
-        hide(app);
-    } else {
-        show(app);
-    }
-}
-
-pub fn reposition_if_open(app: &AppHandle) {
-    if !app.state::<WindowState>().open.load(Ordering::Relaxed) {
-        return;
-    }
-    if let Some(window) = app.get_webview_window("main") {
-        position_window(app, &window);
-    }
-}
-
-pub fn setup_panel(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main")
-        && let (Ok(ptr), Some(mtm)) = (window.ns_window(), MainThreadMarker::new()) {
-            crate::native::make_panel(mtm, ptr);
+    on_main_thread(app, |app| {
+        if opened(app) {
+            hide_now(app);
+        } else {
+            show_now(app);
         }
+    });
+}
+
+pub fn position(app: &AppHandle) {
+    on_main_thread(app, |app| {
+        if let Some(ns_window) = main_window(app) {
+            native::place_on_own_screen(&ns_window, height(app));
+        }
+    });
+}
+
+pub fn setup_panel(app: &AppHandle) -> anyhow::Result<()> {
+    let Some(window) = app.get_webview_window(MAIN) else {
+        anyhow::bail!("main window is missing");
+    };
+    native::make_panel(&window)
 }
 
 pub fn watch_screen_changes(app: &AppHandle) {
@@ -77,38 +116,32 @@ pub fn watch_screen_changes(app: &AppHandle) {
 
     let handle = app.clone();
     let block = RcBlock::new(move |_: core::ptr::NonNull<NSNotification>| {
-        reposition_if_open(&handle);
+        position(&handle);
     });
-    // The observer and block are intentionally leaked: the watcher must live for
-    // the whole process lifetime, and there is nothing to unregister it from.
-    unsafe {
-        let observer = NSNotificationCenter::defaultCenter()
-            .addObserverForName_object_queue_usingBlock(
-                Some(NSApplicationDidChangeScreenParametersNotification),
-                None,
-                None,
-                &block,
-            );
-        std::mem::forget(observer);
-    }
-    std::mem::forget(block);
+    let _ = unsafe {
+        NSNotificationCenter::defaultCenter().addObserverForName_object_queue_usingBlock(
+            Some(NSApplicationDidChangeScreenParametersNotification),
+            None,
+            None,
+            &block,
+        )
+    };
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn is_open(app: AppHandle) -> bool {
-    app.state::<WindowState>().open.load(Ordering::Relaxed)
+    opened(&app)
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn hide_window(app: AppHandle) {
-    let handle = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        if handle.state::<WindowState>().open.load(Ordering::Relaxed) {
-            return;
+    on_main_thread(&app, |app| {
+        if !opened(app)
+            && let Some(ns_window) = main_window(app)
+        {
+            native::order_out(&ns_window);
         }
-        if let Some(window) = handle.get_webview_window("main")
-            && let (Ok(ptr), Some(mtm)) = (window.ns_window(), MainThreadMarker::new()) {
-                crate::native::order_out(mtm, ptr);
-            }
     });
 }
